@@ -1,0 +1,203 @@
+diff --git a/tcsh-6.17.00/sh.c b/tcsh-6.17.00/sh.c
+index 73b6d7f..0f72ada 100644
+--- a/tcsh-6.17.00/sh.c
++++ b/tcsh-6.17.00/sh.c
+@@ -1026,6 +1026,7 @@ main(int argc, char **argv)
+ 	/* that's a meta-questionmark */
+ 	setcopy(STRprompt2, STRmquestion, VAR_READWRITE);
+ 	setcopy(STRprompt3, STRKCORRECT, VAR_READWRITE);
++	setcopy(STRgitbranch, STRdefgitbranch, VAR_READWRITE);
+     }
+ 
+     /*
+diff --git a/tcsh-6.17.00/sh.decls.h b/tcsh-6.17.00/sh.decls.h
+index 70f76a4..fa50748 100644
+--- a/tcsh-6.17.00/sh.decls.h
++++ b/tcsh-6.17.00/sh.decls.h
+@@ -282,6 +282,7 @@ extern	char		 *areadlink	(const char *);
+ extern	void		  xclose	(int);
+ extern	void		  xclosedir	(DIR *);
+ extern	int		  xcreat	(const char *, mode_t);
++extern	int		  xdup2		(int fildes, int fildes2);
+ extern	struct group	 *xgetgrgid	(gid_t);
+ extern	struct passwd	 *xgetpwnam	(const char *);
+ extern	struct passwd	 *xgetpwuid	(uid_t);
+diff --git a/tcsh-6.17.00/sh.misc.c b/tcsh-6.17.00/sh.misc.c
+index 7c4094f..a363ab4 100644
+--- a/tcsh-6.17.00/sh.misc.c
++++ b/tcsh-6.17.00/sh.misc.c
+@@ -37,7 +37,6 @@ RCSID("$tcsh: sh.misc.c,v 3.45 2006/10/14 17:57:21 christos Exp $")
+ static	int	renum	(int, int);
+ static  Char  **blkend	(Char **);
+ static  Char  **blkcat	(Char **, Char **);
+-static	int	xdup2	(int, int);
+ 
+ /*
+  * C Shell
+@@ -552,7 +551,7 @@ xcreat(const char *path, mode_t mode)
+ }
+ 
+ #ifdef HAVE_DUP2
+-static int
++int
+ xdup2(int fildes, int fildes2)
+ {
+     int res;
+diff --git a/tcsh-6.17.00/tc.const.c b/tcsh-6.17.00/tc.const.c
+index ce2d18b..133fe06 100644
+--- a/tcsh-6.17.00/tc.const.c
++++ b/tcsh-6.17.00/tc.const.c
+@@ -96,6 +96,7 @@ Char STRprompt[]	= { 'p', 'r', 'o', 'm', 'p', 't', '\0' };
+ Char STRprompt2[]	= { 'p', 'r', 'o', 'm', 'p', 't', '2', '\0' };
+ Char STRprompt3[]	= { 'p', 'r', 'o', 'm', 'p', 't', '3', '\0' };
+ Char STRrprompt[]	= { 'r', 'p', 'r', 'o', 'm', 'p', 't', '\0' };
++Char STRgitbranch[]	= { 'g', 'i', 't', 'b', 'r', 'a', 'n', 'c', 'h', '\0' };
+ Char STRellipsis[]	= { 'e', 'l', 'l', 'i', 'p', 's', 'i', 's', '\0' };
+ Char STRcwd[]		= { 'c', 'w', 'd', '\0' };
+ Char STRowd[]		= { 'o', 'w', 'd', '\0' };
+@@ -251,6 +252,7 @@ Char STRsldtlogout[]	= { '/', '.', 'l', 'o', 'g', 'o', 'u', 't', '\0' };
+ Char STRjobs[]		= { 'j', 'o', 'b', 's', '\0' };
+ Char STRdeftcshprompt[]	= { '%', '#', ' ', '\0' };
+ Char STRdefcshprompt[]	= { '%', '\0' };
++Char STRdefgitbranch[]	= { '<', '%', 'g', '>', '\0' };
+ Char STRmquestion[]	= { '%', 'R', '?' | QUOTE, ' ', '\0' };
+ Char STRKCORRECT[]	= { 'C', 'O', 'R', 'R', 'E', 'C', 'T', '>', '%', 'R', 
+ 			    ' ', '(', 'y', '|', 'n', '|', 'e', '|', 'a', ')', 
+diff --git a/tcsh-6.17.00/tc.h b/tcsh-6.17.00/tc.h
+index 99a643f..aaca3b8 100644
+--- a/tcsh-6.17.00/tc.h
++++ b/tcsh-6.17.00/tc.h
+@@ -47,6 +47,7 @@ extern size_t tlength;
+ #define FMT_WHO		1
+ #define FMT_HISTORY	2
+ #define FMT_SCHED	3
++#define FMT_GIT		4
+ 
+ struct strbuf {
+     char *s;
+diff --git a/tcsh-6.17.00/tc.prompt.c b/tcsh-6.17.00/tc.prompt.c
+index f63fdf0..08ac7ac 100644
+--- a/tcsh-6.17.00/tc.prompt.c
++++ b/tcsh-6.17.00/tc.prompt.c
+@@ -36,6 +36,7 @@ RCSID("$tcsh: tc.prompt.c,v 3.67 2006/11/17 16:26:58 christos Exp $")
+ 
+ #include "ed.h"
+ #include "tw.h"
++#include <stdio.h>
+ 
+ /*
+  * kfk 21oct1983 -- add @ (time) and / ($cwd) in prompt.
+@@ -178,6 +179,92 @@ tprintf_append_mbs(struct Strbuf *buf, const char *mbs, Char attributes)
+     }
+ }
+ 
++static FILE *
++git_popen(char *const argv[], const char *mode, pid_t *pid)
++{
++    int fd_pipe[2];
++
++    if (pipe(fd_pipe) < 0)
++	return NULL;
++
++    if ((*pid = fork()) < 0)
++	return NULL;
++
++    /*
++     * fd_pipe[0]: input
++     * fd_pipe[1]: output
++     * child -> parent
++     */
++    if (*pid == 0) {
++	xclose(fd_pipe[0]);
++
++	/* STDOUT has been closed already,
++	* so fd_pipe[1] can be STDOUT_FILENO. */
++	if (fd_pipe[1] != STDOUT_FILENO) {
++	    /* duplicate fd to stdout */
++    	    if (dup2(fd_pipe[1], STDOUT_FILENO) < 0)
++		exit(1);
++	    xclose(fd_pipe[1]);
++	}
++
++	if (execvp(argv[0], argv) < 0)
++	    exit(1);
++	exit(0);
++    }
++
++    xclose(fd_pipe[1]);
++    return fdopen(fd_pipe[0], mode);
++}
++
++static char *
++get_git_branch_name(void)
++{
++    char *const cmd[] = { "git", "branch", "--no-color", NULL };
++    char presult[1024], *pterm = &presult[sizeof(presult)];
++    char *ps, *pe, *p;
++    FILE *fp;
++    pid_t pid;
++    int wait_status;
++
++    if ((fp = git_popen(cmd, "rt", &pid)) == NULL)
++	return NULL;
++
++    /* find a line starts with '*' */
++    if (fread(presult, 1, sizeof(presult), fp) <= 0)
++	goto err;
++    for (ps = presult;; ps = pe + 1) {
++	for (pe = ps; *pe != '\n'; pe++) {
++	    if (pe == pterm) {
++		int rest = pterm - ps;
++		memmove(presult, ps, rest);
++		if (fread(presult + rest, 1, sizeof(presult) - rest, fp) <= 0)
++		    goto err;
++		ps = presult;
++		pe = ps + rest - 1; /* to be incremented */
++	    }
++	    if (*pe == '\0')
++		goto err;
++        }
++	if (*ps == '*')
++	    break;
++    }
++
++    ps += 2;
++    *pe = '\0';
++
++    if (fclose(fp) != 0)
++	return NULL;
++    /* wait for the child process to die */
++    waitpid(pid, &wait_status, 0);
++
++    return strdup(ps);
++
++err:
++    fclose(fp);
++    waitpid(pid, &wait_status, 0);
++    return NULL;
++}
++
+ Char *
+ tprintf(int what, const Char *fmt, const char *str, time_t tim, ptr_t info)
+ {
+@@ -520,6 +607,20 @@ tprintf(int what, const Char *fmt, const char *str, time_t tim, ptr_t info)
+ 	    case 'L':
+ 		ClearToBottom();
+ 		break;
++	    case 'g':
++		if (what == FMT_PROMPT) {
++		    char *branch = get_git_branch_name();
++		    if (!branch)
++			break;
++		    p = tprintf(FMT_GIT, varval(STRgitbranch), branch,
++				tim, info);
++		    Strbuf_append(&buf, p);
++		    xfree(p);
++		    xfree(branch);
++		} else if (what == FMT_GIT) {
++		    tprintf_append_mbs(&buf, str, attributes);
++		}
++		break;
+ 
+ 	    case 'j':
+ 		{
