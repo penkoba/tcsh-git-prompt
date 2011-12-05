@@ -11,3 +11,6 @@ and this patch can be applied on top of it.
 
 Maybe it is insane idea to put a patch on the github, but I don't know
 if I could put a tcsh mirror there arbitrarily...
+
+
+Compiled and tested on Linux and cygwin.
