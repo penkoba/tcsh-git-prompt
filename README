@@ -1,0 +1,13 @@
+a patch to tcsh-6.17.00
+to embed git branch name to your prompt, like:
+
+penkoba@localhost:/home/penkoba/src/stupid_code<master>[1]%
+
+Here you can find the latest release of tcsh
+
+  http://www.tcsh.org/MostRecentRelease
+
+and this patch can be applied on top of it.
+
+Maybe it is insane idea to put a patch on the github, but I don't know
+if I could put a tcsh mirror there arbitrarily...
