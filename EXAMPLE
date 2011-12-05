@@ -1,0 +1,14 @@
+a brief example
+(of .cshrc, or any other file loaded from .cshrc)
+
+----->8
+set prompt = '%n@%m:%/%g[%h]%# '
+set gitbranch = '%{\033[32m%}<%g>%{\033[0m%}'
+----->8
+
+The '%g' of the 'prompt' variable will be expanded with 'gitbranch' variable
+if you are in a git branch, then the '%g' again in the 'gitbranch' variable
+will be the raw git branch string. The other part of the 'gitbranch' will
+be parsed just same as the 'prompt' expression grammar.
+In the above example, you will see green-colored "<branch>" string in your
+prompt.
