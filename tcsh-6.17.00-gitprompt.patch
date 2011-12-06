@@ -10,39 +10,6 @@ index 73b6d7f..0f72ada 100644
      }
  
      /*
-diff --git a/tcsh-6.17.00/sh.decls.h b/tcsh-6.17.00/sh.decls.h
-index 70f76a4..fa50748 100644
---- a/tcsh-6.17.00/sh.decls.h
-+++ b/tcsh-6.17.00/sh.decls.h
-@@ -282,6 +282,7 @@ extern	char		 *areadlink	(const char *);
- extern	void		  xclose	(int);
- extern	void		  xclosedir	(DIR *);
- extern	int		  xcreat	(const char *, mode_t);
-+extern	int		  xdup2		(int fildes, int fildes2);
- extern	struct group	 *xgetgrgid	(gid_t);
- extern	struct passwd	 *xgetpwnam	(const char *);
- extern	struct passwd	 *xgetpwuid	(uid_t);
-diff --git a/tcsh-6.17.00/sh.misc.c b/tcsh-6.17.00/sh.misc.c
-index 7c4094f..a363ab4 100644
---- a/tcsh-6.17.00/sh.misc.c
-+++ b/tcsh-6.17.00/sh.misc.c
-@@ -37,7 +37,6 @@ RCSID("$tcsh: sh.misc.c,v 3.45 2006/10/14 17:57:21 christos Exp $")
- static	int	renum	(int, int);
- static  Char  **blkend	(Char **);
- static  Char  **blkcat	(Char **, Char **);
--static	int	xdup2	(int, int);
- 
- /*
-  * C Shell
-@@ -552,7 +551,7 @@ xcreat(const char *path, mode_t mode)
- }
- 
- #ifdef HAVE_DUP2
--static int
-+int
- xdup2(int fildes, int fildes2)
- {
-     int res;
 diff --git a/tcsh-6.17.00/tc.const.c b/tcsh-6.17.00/tc.const.c
 index ce2d18b..133fe06 100644
 --- a/tcsh-6.17.00/tc.const.c
@@ -76,47 +43,40 @@ index 99a643f..aaca3b8 100644
  struct strbuf {
      char *s;
 diff --git a/tcsh-6.17.00/tc.prompt.c b/tcsh-6.17.00/tc.prompt.c
-index f63fdf0..08ac7ac 100644
+index f63fdf0..e6b2545 100644
 --- a/tcsh-6.17.00/tc.prompt.c
 +++ b/tcsh-6.17.00/tc.prompt.c
-@@ -36,6 +36,7 @@ RCSID("$tcsh: tc.prompt.c,v 3.67 2006/11/17 16:26:58 christos Exp $")
- 
- #include "ed.h"
- #include "tw.h"
-+#include <stdio.h>
- 
- /*
-  * kfk 21oct1983 -- add @ (time) and / ($cwd) in prompt.
-@@ -178,6 +179,92 @@ tprintf_append_mbs(struct Strbuf *buf, const char *mbs, Char attributes)
+@@ -178,6 +178,91 @@ tprintf_append_mbs(struct Strbuf *buf, const char *mbs, Char attributes)
      }
  }
  
-+static FILE *
-+git_popen(char *const argv[], const char *mode, pid_t *pid)
++static int
++git_popen(char *const argv[], pid_t *pid)
 +{
-+    int fd_pipe[2];
++    int fds[2];
 +
-+    if (pipe(fd_pipe) < 0)
-+	return NULL;
++    mypipe(fds);
 +
-+    if ((*pid = fork()) < 0)
-+	return NULL;
++    if ((*pid = fork()) < 0) {
++	close(fds[0]);
++	close(fds[1]);
++	return -1;
++    }
 +
 +    /*
-+     * fd_pipe[0]: input
-+     * fd_pipe[1]: output
++     * fds[0]: parent input
++     * fds[1]: child output
 +     * child -> parent
 +     */
 +    if (*pid == 0) {
-+	xclose(fd_pipe[0]);
++	xclose(fds[0]);
 +
-+	/* STDOUT has been closed already,
-+	* so fd_pipe[1] can be STDOUT_FILENO. */
-+	if (fd_pipe[1] != STDOUT_FILENO) {
-+	    /* duplicate fd to stdout */
-+    	    if (dup2(fd_pipe[1], STDOUT_FILENO) < 0)
-+		exit(1);
-+	    xclose(fd_pipe[1]);
++    	dmove(fds[1], STDOUT_FILENO);
++	{
++	    int fd;
++	    for (fd = 0; fd < NOFILE; fd++)
++	    	if (fd != STDOUT_FILENO)
++			xclose(fd);
 +	}
 +
 +	if (execvp(argv[0], argv) < 0)
@@ -124,8 +84,8 @@ index f63fdf0..08ac7ac 100644
 +	exit(0);
 +    }
 +
-+    xclose(fd_pipe[1]);
-+    return fdopen(fd_pipe[0], mode);
++    xclose(fds[1]);
++    return fds[0];
 +}
 +
 +static char *
@@ -134,22 +94,22 @@ index f63fdf0..08ac7ac 100644
 +    char *const cmd[] = { "git", "branch", "--no-color", NULL };
 +    char presult[1024], *pterm = &presult[sizeof(presult)];
 +    char *ps, *pe, *p;
-+    FILE *fp;
++    int fd;
 +    pid_t pid;
 +    int wait_status;
 +
-+    if ((fp = git_popen(cmd, "rt", &pid)) == NULL)
++    if ((fd = git_popen(cmd, &pid)) < 0)
 +	return NULL;
 +
 +    /* find a line starts with '*' */
-+    if (fread(presult, 1, sizeof(presult), fp) <= 0)
++    if (read(fd, presult, sizeof(presult)) <= 0)
 +	goto err;
 +    for (ps = presult;; ps = pe + 1) {
 +	for (pe = ps; *pe != '\n'; pe++) {
 +	    if (pe == pterm) {
 +		int rest = pterm - ps;
 +		memmove(presult, ps, rest);
-+		if (fread(presult + rest, 1, sizeof(presult) - rest, fp) <= 0)
++		if (read(fd, presult + rest, sizeof(presult) - rest) <= 0)
 +		    goto err;
 +		ps = presult;
 +		pe = ps + rest - 1; /* to be incremented */
@@ -164,15 +124,13 @@ index f63fdf0..08ac7ac 100644
 +    ps += 2;
 +    *pe = '\0';
 +
-+    if (fclose(fp) != 0)
-+	return NULL;
++    xclose(fd);
 +    /* wait for the child process to die */
 +    waitpid(pid, &wait_status, 0);
-+
 +    return strdup(ps);
 +
 +err:
-+    fclose(fp);
++    xclose(fd);
 +    waitpid(pid, &wait_status, 0);
 +    return NULL;
 +}
@@ -180,7 +138,7 @@ index f63fdf0..08ac7ac 100644
  Char *
  tprintf(int what, const Char *fmt, const char *str, time_t tim, ptr_t info)
  {
-@@ -520,6 +607,20 @@ tprintf(int what, const Char *fmt, const char *str, time_t tim, ptr_t info)
+@@ -520,6 +605,20 @@ tprintf(int what, const Char *fmt, const char *str, time_t tim, ptr_t info)
  	    case 'L':
  		ClearToBottom();
  		break;
